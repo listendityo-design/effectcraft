@@ -28,8 +28,11 @@ jobs:
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
 
-      - name: Scaffold Android Crate
+      - name: Scaffold Android Crate & Strip Desktop Flags
         run: |
+          # Strip desktop screen-reader feature so it doesn't conflict with Android NativeActivity
+          sed -i 's/"accesskit",//g' apps/effectcraft/Cargo.toml || true
+
           mkdir -p apps/effectcraft-android/src
 
           EFRAME_VER=$(grep -E '^eframe\s*=' Cargo.toml | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' || echo "0.36")
@@ -197,8 +200,8 @@ jobs:
                       .ok()?
                       .filter_map(|e| e.ok())
                       .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("ecproj"))
-                  .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-                  .map(|e| e.path().to_string_lossy().into_owned())
+                      .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                      .map(|e| e.path().to_string_lossy().into_owned())
               }));
 
               let save_dir = projects_dir;
