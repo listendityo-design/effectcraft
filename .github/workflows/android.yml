@@ -32,7 +32,9 @@ jobs:
         run: |
           mkdir -p apps/effectcraft-android/src
 
-          EFRAME_VER=$(grep -E '^eframe\s*=' Cargo.toml | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' || echo "0.36")
+          EFRAME_VER=$(grep -E '^eframe\s*=' Cargo.toml | head -1 | grep -oE '"[0-9][^"]*"' | head -1 | tr -d '"')
+          EFRAME_VER=${EFRAME_VER:-0.36}
+          echo "Using eframe $EFRAME_VER"
 
           cat <<EOF > apps/effectcraft-android/Cargo.toml
           [package]
@@ -53,26 +55,31 @@ jobs:
           eframe = { version = "${EFRAME_VER}", default-features = false, features = [
               "default_fonts",
               "wgpu",
-              "android-game-activity",
+              "android-native-activity",
           ] }
           wgpu = { workspace = true }
           serde_json = { workspace = true }
           rayon = { workspace = true }
           log = { workspace = true }
           android_logger = "0.15"
-          winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
+          winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 
           [package.metadata.android]
           package = "com.artcraft.effectcraft"
-          label = "EffectCraft"
           apk_name = "effectcraft"
           build_targets = ["aarch64-linux-android"]
-          fullscreen = true
-          orientation = "sensorLandscape"
 
           [package.metadata.android.sdk]
           min_sdk_version = 28
           target_sdk_version = 34
+
+          [package.metadata.android.application]
+          label = "EffectCraft"
+          theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+          [package.metadata.android.application.activity]
+          orientation = "sensorLandscape"
+          config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode"
 
           [[package.metadata.android.uses_feature]]
           name = "android.hardware.vulkan.level"
@@ -133,32 +140,26 @@ jobs:
           }
           EOF
 
-      - name: Build and Sign APK
-        env:
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+      - name: Create release keystore
         run: |
-          cargo apk build -p effectcraft-android --release
-
-          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
-
-          keytool -genkey -v -keystore release.keystore \
+          keytool -genkey -v -keystore "$RUNNER_TEMP/release.keystore" \
             -alias effectcraft -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=EffectCraft,O=ArtCraft,C=US"
 
-          mkdir -p dist
-          "$BUILD_TOOLS_DIR/zipalign" -v -p 4 "target/release/apk/effectcraft.apk" "dist/aligned.apk"
-          "$BUILD_TOOLS_DIR/apksigner" sign \
-            --ks release.keystore \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --out "dist/effectcraft-android-signed.apk" \
-            "dist/aligned.apk"
+      - name: Build and Sign APK
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/release.keystore
+          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
+        run: |
+          cargo apk build -p effectcraft-android --release
+          ls -la target/release/apk/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: EffectCraft-Android-ARM64-APK
-          path: dist/effectcraft-android-signed.apk
+          path: target/release/apk/effectcraft.apk
           retention-days: 14
