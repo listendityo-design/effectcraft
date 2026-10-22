@@ -28,11 +28,8 @@ jobs:
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
 
-      - name: Scaffold Android Crate & Strip Desktop Flags
+      - name: Scaffold Android Crate
         run: |
-          # Strip desktop screen-reader feature so it doesn't conflict with Android NativeActivity
-          sed -i 's/"accesskit",//g' apps/effectcraft/Cargo.toml || true
-
           mkdir -p apps/effectcraft-android/src
 
           EFRAME_VER=$(grep -E '^eframe\s*=' Cargo.toml | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' || echo "0.36")
@@ -56,14 +53,14 @@ jobs:
           eframe = { version = "${EFRAME_VER}", default-features = false, features = [
               "default_fonts",
               "wgpu",
-              "android-native-activity",
+              "android-game-activity",
           ] }
           wgpu = { workspace = true }
           serde_json = { workspace = true }
           rayon = { workspace = true }
           log = { workspace = true }
           android_logger = "0.15"
-          winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+          winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
 
           [package.metadata.android]
           package = "com.artcraft.effectcraft"
