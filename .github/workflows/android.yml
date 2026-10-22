@@ -83,12 +83,8 @@ jobs:
           cat <<'EOF' > apps/effectcraft-android/src/lib.rs
           #![cfg(target_os = "android")]
 
-          use std::path::PathBuf;
-          use effectcraft_ui_egui::{
-              EffectcraftApp,
-              dock::{DockNode, PanelKind, SplitSize},
-          };
-          use egui::{FontFamily, FontId, TextStyle, Vec2};
+          use effectcraft_ui_egui::EffectcraftApp;
+          use egui::{FontFamily, FontId, Style, TextStyle, Vec2};
           use serde_json::json;
           use winit::platform::android::activity::AndroidApp;
 
@@ -100,6 +96,7 @@ jobs:
                       .with_tag("EffectCraft"),
               );
 
+              // Cap Rayon workers to avoid mobile thermal throttling
               let worker_threads = std::thread::available_parallelism()
                   .map(|n| (n.get() / 2).clamp(2, 4))
                   .unwrap_or(3);
@@ -108,25 +105,20 @@ jobs:
                   .thread_name(|i| format!("ec-worker-{i}"))
                   .build_global();
 
-              let storage_dir = app
-                  .external_data_path()
-                  .or_else(|| app.internal_data_path())
-                  .unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
-              let projects_dir = storage_dir.join("projects");
-              let _ = std::fs::create_dir_all(&projects_dir);
-
-              let mut native_options = eframe::NativeOptions {
+              let native_options = eframe::NativeOptions {
                   android_app: Some(app),
                   renderer: eframe::Renderer::Wgpu,
                   ..Default::default()
               };
-              native_options.wgpu_options.power_preference = wgpu::PowerPreference::HighPerformance;
 
               let _ = eframe::run_native(
                   "EffectCraft",
                   native_options,
                   Box::new(move |cc| {
-                      configure_android_touch_style(&cc.egui_ctx);
+                      // egui 0.36 style mutation
+                      let mut style = (*cc.egui_ctx.style()).clone();
+                      configure_android_touch_style(&mut style);
+                      cc.egui_ctx.set_style(style);
 
                       let mut session = effectcraft_host::session();
                       let _ = session.execute(
@@ -140,76 +132,27 @@ jobs:
                           }),
                       );
 
-                      let mut ec_app = EffectcraftApp::new(session);
-                      apply_mobile_dock_layout(&mut ec_app);
-                      wire_android_storage_hooks(&mut ec_app, projects_dir);
-
+                      let ec_app = EffectcraftApp::new(session);
                       Ok(Box::new(ec_app))
                   }),
               );
           }
 
-          fn configure_android_touch_style(ctx: &egui::Context) {
-              ctx.style_mut(|style| {
-                  style.spacing.interact_size = Vec2::new(44.0, 34.0);
-                  style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-                  style.spacing.button_padding = Vec2::new(10.0, 6.0);
-                  style.spacing.scroll.bar_width = 12.0;
-                  style.spacing.scroll.handle_min_length = 32.0;
-                  style.spacing.scroll.floating = false;
-                  style.text_styles.insert(
-                      TextStyle::Body,
-                      FontId::new(14.5, FontFamily::Proportional),
-                  );
-                  style.text_styles.insert(
-                      TextStyle::Button,
-                      FontId::new(14.5, FontFamily::Proportional),
-                  );
-              });
-          }
-
-          fn apply_mobile_dock_layout(app: &mut EffectcraftApp) {
-              app.ui.dock.root = DockNode::Split {
-                  vertical: true,
-                  size: SplitSize::Fraction(0.58),
-                  a: Box::new(DockNode::Tabs {
-                      panels: vec![
-                          PanelKind::Composition,
-                          PanelKind::EffectControls,
-                          PanelKind::EffectsPresets,
-                          PanelKind::Project,
-                          PanelKind::Character,
-                          PanelKind::RenderQueue,
-                      ],
-                      active: 0,
-                  }),
-                  b: Box::new(DockNode::Tabs {
-                      panels: vec![PanelKind::Timeline],
-                      active: 0,
-                  }),
-              };
-          }
-
-          fn wire_android_storage_hooks(app: &mut EffectcraftApp, projects_dir: PathBuf) {
-              let open_dir = projects_dir.clone();
-              app.hooks.pick_open_project = Some(Box::new(move || {
-                  std::fs::read_dir(&open_dir)
-                      .ok()?
-                      .filter_map(|e| e.ok())
-                      .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("ecproj"))
-                      .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-                      .map(|e| e.path().to_string_lossy().into_owned())
-              }));
-
-              let save_dir = projects_dir;
-              app.hooks.pick_save_project = Some(Box::new(move || {
-                  Some(
-                      save_dir
-                          .join("autosave_mobile.ecproj")
-                          .to_string_lossy()
-                          .into_owned(),
-                  )
-              }));
+          fn configure_android_touch_style(style: &mut Style) {
+              style.spacing.interact_size = Vec2::new(44.0, 34.0);
+              style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+              style.spacing.button_padding = Vec2::new(10.0, 6.0);
+              style.spacing.scroll.bar_width = 12.0;
+              style.spacing.scroll.handle_min_length = 32.0;
+              style.spacing.scroll.floating = false;
+              style.text_styles.insert(
+                  TextStyle::Body,
+                  FontId::new(14.5, FontFamily::Proportional),
+              );
+              style.text_styles.insert(
+                  TextStyle::Button,
+                  FontId::new(14.5, FontFamily::Proportional),
+              );
           }
           EOF
 
