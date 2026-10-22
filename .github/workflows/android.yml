@@ -84,7 +84,6 @@ jobs:
           #![cfg(target_os = "android")]
 
           use effectcraft_ui_egui::EffectcraftApp;
-          use egui::{FontFamily, FontId, Style, TextStyle, Vec2};
           use serde_json::json;
           use winit::platform::android::activity::AndroidApp;
 
@@ -96,7 +95,7 @@ jobs:
                       .with_tag("EffectCraft"),
               );
 
-              // Cap Rayon workers to avoid mobile thermal throttling
+              // Cap Rayon worker threads for mobile big.LITTLE thermals
               let worker_threads = std::thread::available_parallelism()
                   .map(|n| (n.get() / 2).clamp(2, 4))
                   .unwrap_or(3);
@@ -114,12 +113,7 @@ jobs:
               let _ = eframe::run_native(
                   "EffectCraft",
                   native_options,
-                  Box::new(move |cc| {
-                      // egui 0.36 style mutation
-                      let mut style = (*cc.egui_ctx.style()).clone();
-                      configure_android_touch_style(&mut style);
-                      cc.egui_ctx.set_style(style);
-
+                  Box::new(move |_cc| {
                       let mut session = effectcraft_host::session();
                       let _ = session.execute(
                           "comp.new",
@@ -135,23 +129,6 @@ jobs:
                       let ec_app = EffectcraftApp::new(session);
                       Ok(Box::new(ec_app))
                   }),
-              );
-          }
-
-          fn configure_android_touch_style(style: &mut Style) {
-              style.spacing.interact_size = Vec2::new(44.0, 34.0);
-              style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-              style.spacing.button_padding = Vec2::new(10.0, 6.0);
-              style.spacing.scroll.bar_width = 12.0;
-              style.spacing.scroll.handle_min_length = 32.0;
-              style.spacing.scroll.floating = false;
-              style.text_styles.insert(
-                  TextStyle::Body,
-                  FontId::new(14.5, FontFamily::Proportional),
-              );
-              style.text_styles.insert(
-                  TextStyle::Button,
-                  FontId::new(14.5, FontFamily::Proportional),
               );
           }
           EOF
