@@ -1,0 +1,244 @@
+name: Build EffectCraft Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust & Android Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set Up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Cache Build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+
+      - name: Scaffold Android Crate
+        run: |
+          mkdir -p apps/effectcraft-android/src
+
+          EFRAME_VER=$(grep -E '^eframe\s*=' Cargo.toml | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/' || echo "0.36")
+
+          cat <<EOF > apps/effectcraft-android/Cargo.toml
+          [package]
+          name = "effectcraft-android"
+          version.workspace = true
+          edition.workspace = true
+          license.workspace = true
+
+          [lib]
+          name = "effectcraft_android"
+          crate-type = ["cdylib"]
+
+          [dependencies]
+          effectcraft-engine = { workspace = true }
+          effectcraft-host = { workspace = true }
+          effectcraft-ui-egui = { workspace = true }
+          egui = { workspace = true }
+          eframe = { version = "${EFRAME_VER}", default-features = false, features = [
+              "default_fonts",
+              "wgpu",
+              "android-native-activity",
+          ] }
+          wgpu = { workspace = true }
+          serde_json = { workspace = true }
+          rayon = { workspace = true }
+          log = { workspace = true }
+          android_logger = "0.15"
+          winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+
+          [package.metadata.android]
+          package = "com.artcraft.effectcraft"
+          label = "EffectCraft"
+          apk_name = "effectcraft"
+          build_targets = ["aarch64-linux-android"]
+          fullscreen = true
+          orientation = "sensorLandscape"
+
+          [package.metadata.android.sdk]
+          min_sdk_version = 28
+          target_sdk_version = 34
+
+          [[package.metadata.android.uses_feature]]
+          name = "android.hardware.vulkan.level"
+          required = false
+          version = 1
+          EOF
+
+          cat <<'EOF' > apps/effectcraft-android/src/lib.rs
+          #![cfg(target_os = "android")]
+
+          use std::path::PathBuf;
+          use effectcraft_ui_egui::{
+              EffectcraftApp,
+              dock::{DockNode, PanelKind, SplitSize},
+          };
+          use egui::{FontFamily, FontId, TextStyle, Vec2};
+          use serde_json::json;
+          use winit::platform::android::activity::AndroidApp;
+
+          #[unsafe(no_mangle)]
+          fn android_main(app: AndroidApp) {
+              android_logger::init_once(
+                  android_logger::Config::default()
+                      .with_max_level(log::LevelFilter::Info)
+                      .with_tag("EffectCraft"),
+              );
+
+              let worker_threads = std::thread::available_parallelism()
+                  .map(|n| (n.get() / 2).clamp(2, 4))
+                  .unwrap_or(3);
+              let _ = rayon::ThreadPoolBuilder::new()
+                  .num_threads(worker_threads)
+                  .thread_name(|i| format!("ec-worker-{i}"))
+                  .build_global();
+
+              let storage_dir = app
+                  .external_data_path()
+                  .or_else(|| app.internal_data_path())
+                  .unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
+              let projects_dir = storage_dir.join("projects");
+              let _ = std::fs::create_dir_all(&projects_dir);
+
+              let mut native_options = eframe::NativeOptions {
+                  android_app: Some(app),
+                  renderer: eframe::Renderer::Wgpu,
+                  ..Default::default()
+              };
+              native_options.wgpu_options.power_preference = wgpu::PowerPreference::HighPerformance;
+
+              let _ = eframe::run_native(
+                  "EffectCraft",
+                  native_options,
+                  Box::new(move |cc| {
+                      configure_android_touch_style(&cc.egui_ctx);
+
+                      let mut session = effectcraft_host::session();
+                      let _ = session.execute(
+                          "comp.new",
+                          json!({
+                              "name": "Mobile Comp",
+                              "width": 1280,
+                              "height": 720,
+                              "fps": 30.0,
+                              "duration": 5.0
+                          }),
+                      );
+
+                      let mut ec_app = EffectcraftApp::new(session);
+                      apply_mobile_dock_layout(&mut ec_app);
+                      wire_android_storage_hooks(&mut ec_app, projects_dir);
+
+                      Ok(Box::new(ec_app))
+                  }),
+              );
+          }
+
+          fn configure_android_touch_style(ctx: &egui::Context) {
+              ctx.style_mut(|style| {
+                  style.spacing.interact_size = Vec2::new(44.0, 34.0);
+                  style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+                  style.spacing.button_padding = Vec2::new(10.0, 6.0);
+                  style.spacing.scroll.bar_width = 12.0;
+                  style.spacing.scroll.handle_min_length = 32.0;
+                  style.spacing.scroll.floating = false;
+                  style.text_styles.insert(
+                      TextStyle::Body,
+                      FontId::new(14.5, FontFamily::Proportional),
+                  );
+                  style.text_styles.insert(
+                      TextStyle::Button,
+                      FontId::new(14.5, FontFamily::Proportional),
+                  );
+              });
+          }
+
+          fn apply_mobile_dock_layout(app: &mut EffectcraftApp) {
+              app.ui.dock.root = DockNode::Split {
+                  vertical: true,
+                  size: SplitSize::Fraction(0.58),
+                  a: Box::new(DockNode::Tabs {
+                      panels: vec![
+                          PanelKind::Composition,
+                          PanelKind::EffectControls,
+                          PanelKind::EffectsPresets,
+                          PanelKind::Project,
+                          PanelKind::Character,
+                          PanelKind::RenderQueue,
+                      ],
+                      active: 0,
+                  }),
+                  b: Box::new(DockNode::Tabs {
+                      panels: vec![PanelKind::Timeline],
+                      active: 0,
+                  }),
+              };
+          }
+
+          fn wire_android_storage_hooks(app: &mut EffectcraftApp, projects_dir: PathBuf) {
+              let open_dir = projects_dir.clone();
+              app.hooks.pick_open_project = Some(Box::new(move || {
+                  std::fs::read_dir(&open_dir)
+                      .ok()?
+                      .filter_map(|e| e.ok())
+                      .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("ecproj"))
+                  .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                  .map(|e| e.path().to_string_lossy().into_owned())
+              }));
+
+              let save_dir = projects_dir;
+              app.hooks.pick_save_project = Some(Box::new(move || {
+                  Some(
+                      save_dir
+                          .join("autosave_mobile.ecproj")
+                          .to_string_lossy()
+                          .into_owned(),
+                  )
+              }));
+          }
+          EOF
+
+      - name: Build and Sign APK
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo apk build -p effectcraft-android --release
+
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+
+          keytool -genkey -v -keystore release.keystore \
+            -alias effectcraft -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=EffectCraft,O=ArtCraft,C=US"
+
+          mkdir -p dist
+          "$BUILD_TOOLS_DIR/zipalign" -v -p 4 "target/release/apk/effectcraft.apk" "dist/aligned.apk"
+          "$BUILD_TOOLS_DIR/apksigner" sign \
+            --ks release.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "dist/effectcraft-android-signed.apk" \
+            "dist/aligned.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: EffectCraft-Android-ARM64-APK
+          path: dist/effectcraft-android-signed.apk
+          retention-days: 14
