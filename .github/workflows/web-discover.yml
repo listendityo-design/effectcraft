@@ -1,0 +1,26 @@
+name: Web discovery
+
+on:
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Find web related files
+        run: |
+          echo "=== index.html and Trunk.toml files ==="
+          find . -name index.html -not -path "./target/*" -not -path "*/node_modules/*" | head -20
+          find . -name Trunk.toml -not -path "./target/*" | head
+          echo "=== wasm mentions ==="
+          grep -rniE "wasm|trunk" --include=*.md --include=Cargo.toml --include=*.yml --include=*.rs . 2>/dev/null | grep -v "^./target/" | head -60
+          echo "=== root Cargo.toml ==="
+          cat Cargo.toml
+
+      - name: xtask help
+        continue-on-error: true
+        run: cargo xtask --help
